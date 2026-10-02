@@ -31,6 +31,30 @@ end
 local function IsShiftPressed()
     return (bit.band(ffi.C.GetKeyState(0x10), 0x8000) ~= 0);
 end
+
+-- Local patch (2026-10-01): mouse events arrive in window coordinates, but
+-- timers are drawn in backbuffer coordinates. They differ when the game
+-- renders at a higher resolution than the window (3840x2160 in a 2560x1440
+-- window here), which made drag handles and tooltips miss.
+pcall(ffi.cdef, [[
+    typedef struct { int32_t left, top, right, bottom; } TT_RECT;
+    int32_t GetClientRect(void* hWnd, TT_RECT* lpRect);
+]]);
+local clientRect = ffi.new('TT_RECT');
+local function GetMouseScale()
+    local hwnd = AshitaCore:GetProperties():GetFinalFantasyHwnd();
+    if (hwnd == nil) or (hwnd == 0) or (ffi.C.GetClientRect(ffi.cast('void*', hwnd), clientRect) == 0) then
+        return 1, 1;
+    end
+    local _, view = d3d.get_device():GetViewport();
+    local cw = clientRect.right - clientRect.left;
+    local ch = clientRect.bottom - clientRect.top;
+    if (view == nil) or (cw <= 0) or (ch <= 0) then
+        return 1, 1;
+    end
+    return view.Width / cw, view.Height / ch;
+end
+
 local TimerGroup = {};
 
 function TimerGroup:New(newSettings)
@@ -47,7 +71,11 @@ function TimerGroup:New(newSettings)
     return o;
 end
 
-function TimerGroup:HandleMouse(e)
+function TimerGroup:HandleMouse(event)
+    -- Proxy with scaled x/y; reads of other fields and writes (e.blocked) go
+    -- to the real event.
+    local sx, sy = GetMouseScale();
+    local e = setmetatable({ x = event.x * sx, y = event.y * sy }, { __index = event, __newindex = event });
     self.Mouse.X = e.x;
     self.Mouse.Y = e.y;
 
