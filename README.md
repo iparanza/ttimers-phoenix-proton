@@ -15,6 +15,13 @@ overflow (`warn:seh:dispatch_exception stack overflow` in the Proton log)
 right after tTimers loads `gdifonts/gdifonttexture.dll`, its GDI text
 rendering library. With every other default addon the game runs fine.
 
+The known Wine workaround from
+[tTimers issue #19](https://github.com/ThornyFFXI/tTimers/issues/19),
+installing native gdiplus with winetricks, does not help here: native
+gdiplus was already installed in the prefix (`"*gdiplus"="native"`) when
+the crash was reproduced. That issue was about garbled text; this one is a
+crash.
+
 ## Changes
 
 ### 1. `gdifonts/include.lua`: draw text without the DLL
