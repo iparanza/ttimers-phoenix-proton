@@ -31,8 +31,12 @@ render text into textures. The replacement keeps the same API (the functions
 tTimers calls are unchanged) but draws with Ashita's built-in font objects
 (`AshitaCore:GetFontManager()`) instead. The DLL is never loaded.
 
-- Labels, countdowns and tooltips use Ashita font objects with the
-  `ManualRender` draw flag, so they draw only when tTimers asks, as before.
+- Labels, countdowns and tooltips use Ashita font objects. Ashita draws them
+  in its own pass; the shim only shows the ones tTimers asked for each frame.
+  An earlier version drew them by hand with the `ManualRender` flag, which
+  crashed the game while zoning (a call into a freed Direct3D object in
+  DXVK's `d3d8.dll`). Nothing is created or shown from zone-out until 3 s
+  after zone-in.
 - The reposition drag handle is a small "MOVE" font object on a filled
   background.
 - Objects tTimers stops drawing (expired timers) are hidden each frame and

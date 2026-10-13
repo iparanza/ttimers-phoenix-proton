@@ -5,21 +5,47 @@ game with a stack overflow under Proton. This version keeps the same API but
 draws through Ashita's own font and primitive objects, so no DLL is loaded.
 
 gdifonts draws immediately: an object shows only on frames where render() is
-called. Ashita objects are retained, so each one is drawn with the
-ManualRender flag, and a per-frame sweep hides any object that render() was
-not called on. Objects unused for a few seconds are deleted and rebuilt on
-the next render().
+called. Ashita objects are retained, so render() makes an object visible and
+Ashita draws it in its own pass. A per-frame sweep hides any object that
+render() was not called on. Objects unused for a few seconds are deleted and
+rebuilt on the next render().
+
+Objects are never drawn by hand with the ManualRender flag. Calling Render()
+from Lua crashed the game while zoning (a call into a freed Direct3D object
+inside DXVK's d3d8.dll). Nothing is shown or created while zoning either.
 --]]
 
-local MANUAL_RENDER = 0x20; -- FontDrawFlags.ManualRender
 local OUTLINED      = 0x10; -- FontDrawFlags.Outlined
 local RIGHT         = 0x08; -- FontDrawFlags.RightJustified
 local CENTER_X      = 0x02; -- FontDrawFlags.CenterX
 local DELETE_AFTER  = 3;    -- seconds unused before the Ashita object is freed
+local ZONE_SETTLE   = 3;    -- seconds after zone-in before drawing again
 
 local aliasCount = 0;
 local frame      = 0;
 local active     = {}; -- shim objects that currently own an Ashita object
+
+-- True from the zone-out packet until ZONE_SETTLE seconds after zone-in.
+local zoning     = false;
+local zonedInAt  = nil;
+
+local function is_zoning()
+    if (zonedInAt ~= nil) and (os.clock() - zonedInAt > ZONE_SETTLE) then
+        zoning = false;
+        zonedInAt = nil;
+    end
+    return zoning;
+end
+
+ashita.events.register('packet_in', '__ttimers_gdi_zone', function (e)
+    if (e.id == 0x000B) then
+        zoning = true;
+        zonedInAt = nil;
+    elseif (e.id == 0x000A) then
+        zoning = true;
+        zonedInAt = os.clock();
+    end
+end);
 
 local function next_alias(kind)
     aliasCount = aliasCount + 1;
@@ -133,12 +159,12 @@ local function set_bg_color(obj, c) obj:GetBackground():SetColor(c); end
 
 function font:render(sprite)
     local s = self.state;
-    if (not s.visible) or (s.text == '') then
+    if (not s.visible) or (s.text == '') or is_zoning() then
         return;
     end
     self:touch();
 
-    local drawFlags = MANUAL_RENDER;
+    local drawFlags = 0;
     if (s.outlineWidth > 0) then
         drawFlags = bit.bor(drawFlags, OUTLINED);
     end
@@ -163,8 +189,6 @@ function font:render(sprite)
     self:apply('visible', obj.SetVisible, true);
     self:apply('bgVisible', set_bg_visible, s.bgVisible);
     self:apply('bgColor', set_bg_color, s.bgColor);
-
-    obj:Render();
 end
 
 -- Rect objects (the drag handle). Drawing an Ashita primitive manually crashed
