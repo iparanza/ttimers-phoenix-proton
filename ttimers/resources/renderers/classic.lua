@@ -141,6 +141,37 @@ local function TimeToString(timer, showTenths)
     end
 end
 
+-- Shorten a label so it fits in maxWidth pixels, ending it with "..".
+-- The font shim draws wider than the skin font, so long debuff labels
+-- ran under the timer. The result is cached until the text or width changes.
+local function FitLabel(renderData, label, maxWidth)
+    local text = renderData.Label;
+    local cache = renderData.Local;
+    local key = math.floor(maxWidth);
+    if (cache.fitSource == text) and (cache.fitWidth == key) then
+        return cache.fitText;
+    end
+
+    local fitted = text;
+    label:set_text(text);
+    if (label:get_text_size() > maxWidth) then
+        local n = #text;
+        while (n > 1) do
+            n = n - 1;
+            fitted = text:sub(1, n) .. '..';
+            label:set_text(fitted);
+            if (label:get_text_size() <= maxWidth) then
+                break;
+            end
+        end
+    end
+
+    cache.fitSource = text;
+    cache.fitWidth = key;
+    cache.fitText = fitted;
+    return fitted;
+end
+
 local renderer = {};
 renderer.DefaultSkin = 'windower';
 
@@ -315,30 +346,41 @@ function renderer:DrawTimers(sprite, position, renderDataContainer)
         end
 
         local labelLayout = self.Skin.Label;
-        if (type(renderData.Label) == 'string') and (renderData.Label ~= '') then
-            if (renderData.Local.label == nil) then
-                renderData.Local.label = gdi:create_object(labelLayout, true);
-            end
+        local timerRight = position.X + ((barLayout.Width - barLayout.TimerOffsetX) * scale);
 
-            local label = renderData.Local.label;
-            label:set_font_height(labelLayout.font_height * scale);
-            label:set_text(renderData.Label);
-            label:set_position_x(position.X + (barLayout.NameOffsetX * scale));
-            label:set_position_y(position.Y + (barLayout.NameOffsetY * scale));
-            label:render(sprite);
-        end
-
+        -- Set up the timer text first so the label can stop before it.
+        local duration = nil;
+        local durationWidth = 0;
         if (renderData.Duration > 0) then
             if (renderData.Local.duration == nil) then
                 renderData.Local.duration = gdi:create_object(labelLayout, true);
                 renderData.Local.duration:set_font_alignment(2);
             end
 
-            local duration = renderData.Local.duration;
+            duration = renderData.Local.duration;
             duration:set_font_height(labelLayout.font_height * scale);
             duration:set_text(TimeToString(renderData.Duration, showTenths));
-            duration:set_position_x(position.X + ((barLayout.Width - barLayout.TimerOffsetX) * scale))
+            duration:set_position_x(timerRight);
             duration:set_position_y(position.Y + (barLayout.TimerOffsetY * scale));
+            durationWidth = duration:get_text_size();
+        end
+
+        if (type(renderData.Label) == 'string') and (renderData.Label ~= '') then
+            if (renderData.Local.label == nil) then
+                renderData.Local.label = gdi:create_object(labelLayout, true);
+            end
+
+            local label = renderData.Local.label;
+            local labelX = position.X + (barLayout.NameOffsetX * scale);
+            local labelRoom = timerRight - durationWidth - (16 * scale) - labelX;
+            label:set_font_height(labelLayout.font_height * scale);
+            label:set_text(FitLabel(renderData, label, labelRoom));
+            label:set_position_x(labelX);
+            label:set_position_y(position.Y + (barLayout.NameOffsetY * scale));
+            label:render(sprite);
+        end
+
+        if (duration ~= nil) then
             duration:render(sprite);
         end
 

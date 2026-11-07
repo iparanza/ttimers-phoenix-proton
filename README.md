@@ -1,9 +1,9 @@
 # tTimers 0.25: Linux/Proton fix for Phoenix
 
 A modified copy of [tTimers](https://github.com/ThornyFFXI/tTimers) by Thorny,
-version 0.25 as installed by the Phoenix launcher. Three files change. Two are
-display and input fixes; the third makes the debuff tracker see AoE targets.
-No timing logic was changed and no packets are sent.
+version 0.25 as installed by the Phoenix launcher. Most changes are display
+and input fixes; one makes the debuff tracker see AoE targets. No timing
+logic was changed and no packets are sent.
 
 Review the changes in one place: the first commit is the unmodified addon,
 so `git diff 24fe218` shows everything changed since.
@@ -67,6 +67,15 @@ short one ("<target> is <status>.", 277). The tracker only knew the long
 forms, so Horde Lullaby, Sleepga and the like timed the main target only.
 The short forms 277, 278 (receives the effect) and 264 (takes damage, e.g.
 Diaga) now count too.
+
+### 4. `resources/renderers/classic.lua`: labels stop before the timer
+
+The classic renderer places the label and the countdown at fixed spots and
+never shortens the label. With the wider ImGui font, long debuff labels such
+as `Foe Requiem IV[Wight+1]` ran under the countdown. The countdown is now
+measured first, and the label is cut to fit the space left of it with a
+16 pixel gap (times the panel scale), ending in `..`. The fitted text is
+cached until the label or the space changes.
 
 ## Not changed
 
