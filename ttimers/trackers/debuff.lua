@@ -31,9 +31,10 @@ local abilityTypes = T{ 6, 14, 15 };
 local actionMessages = T{
     Death = T{ 6, 20, 113, 406, 605, 646 },
     Expired = T{ 64, 204, 206, 350, 351 },
-    Damage = T{ 2, 110, 252, 317 },
+    --264, 277 and 278 are the AoE forms LSB servers send for targets other than the main one..
+    Damage = T{ 2, 110, 252, 264, 317 },
     Steps = T{ 519, 520, 521, 591 },
-    Applied = T{ 127, 203, 236, 237, 268, 270, 271 },
+    Applied = T{ 127, 203, 236, 237, 268, 270, 271, 277, 278 },
 };
 local dotPriority = T{
     [232] = 6,

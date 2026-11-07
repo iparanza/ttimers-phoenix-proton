@@ -1,8 +1,9 @@
 # tTimers 0.25: Linux/Proton fix for Phoenix
 
 A modified copy of [tTimers](https://github.com/ThornyFFXI/tTimers) by Thorny,
-version 0.25 as installed by the Phoenix launcher. Two files change. Both are
-display and input fixes; no tracking, timing, or packet logic was changed.
+version 0.25 as installed by the Phoenix launcher. Three files change. Two are
+display and input fixes; the third makes the debuff tracker see AoE targets.
+No timing logic was changed and no packets are sent.
 
 Review the changes in one place: the first commit is the unmodified addon,
 the second commit is the whole diff.
@@ -55,9 +56,18 @@ wrong timer. `HandleMouse` now scales the mouse position by
 backbuffer size / window client size before hit testing. When the sizes match,
 the scale is 1 and behavior is unchanged.
 
+### 3. `trackers/debuff.lua`: debuffs on AoE targets
+
+The server reports an AoE spell's main target with the long message ("<caster>
+casts <spell>. <target> is <status>.", 236) and every other target with a
+short one ("<target> is <status>.", 277). The tracker only knew the long
+forms, so Horde Lullaby, Sleepga and the like timed the main target only.
+The short forms 277, 278 (receives the effect) and 264 (takes damage, e.g.
+Diaga) now count too.
+
 ## Not changed
 
-Timer tracking (buffs, debuffs, recasts, custom timers), durations, packet
+Buff, recast and custom timer tracking, durations, packet
 handling, commands, and settings are all as distributed. The original's
 outgoing requests in `durations/data.lua` (packets 0x61 and 0xC0) are
 untouched, and the changes add no new packets or commands.
