@@ -77,6 +77,12 @@ measured first, and the label is cut to fit the space left of it with a
 16 pixel gap (times the panel scale), ending in `..`. The fitted text is
 cached until the label or the space changes.
 
+### 5. `resources/skins/classic/windower*.lua`: wider bars
+
+The `windower` and `windower_bottom_justified` skins' bar width goes from
+215 to 300, so labels with a target name fit before they are cut. The `wow`
+skins are unchanged.
+
 ## Not changed
 
 Buff, recast and custom timer tracking, durations, packet
