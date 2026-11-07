@@ -2,58 +2,52 @@
 Replacement for Thorny's gdifonts include.lua (original saved as
 include.lua.orig). The original loads gdifonttexture.dll, which kills the
 game with a stack overflow under Proton. This version keeps the same API but
-draws through Ashita's own font and primitive objects, so no DLL is loaded.
+draws with ImGui, so no DLL is loaded.
 
 gdifonts draws immediately: an object shows only on frames where render() is
-called. Ashita objects are retained, so render() makes an object visible and
-Ashita draws it in its own pass. A per-frame sweep hides any object that
-render() was not called on. Objects unused for a few seconds are deleted and
-rebuilt on the next render().
+called. ImGui works the same way, so render() adds the text to ImGui's
+foreground draw list and nothing is kept between frames. The foreground list
+is drawn last, on top of tTimers' bars.
 
-Objects are never drawn by hand with the ManualRender flag. Calling Render()
-from Lua crashed the game while zoning (a call into a freed Direct3D object
-inside DXVK's d3d8.dll). Nothing is shown or created while zoning either.
+Earlier versions used Ashita font objects. Drawing them by hand with the
+ManualRender flag crashed the game while zoning (a call into a freed Direct3D
+object inside DXVK's d3d8.dll). Letting Ashita draw them put the text under
+the bars. Drawing an Ashita primitive by hand also crashed.
 --]]
 
-local OUTLINED      = 0x10; -- FontDrawFlags.Outlined
-local RIGHT         = 0x08; -- FontDrawFlags.RightJustified
-local CENTER_X      = 0x02; -- FontDrawFlags.CenterX
-local DELETE_AFTER  = 3;    -- seconds unused before the Ashita object is freed
-local ZONE_SETTLE   = 3;    -- seconds after zone-in before drawing again
+local imgui = require('imgui');
 
-local aliasCount = 0;
-local frame      = 0;
-local active     = {}; -- shim objects that currently own an Ashita object
+local OUTLINE_STEPS = {
+    { -1, -1 }, { 0, -1 }, { 1, -1 },
+    { -1,  0 },            { 1,  0 },
+    { -1,  1 }, { 0,  1 }, { 1,  1 },
+};
+local BG_PAD     = 3;    -- pixels of background around tooltip text
+local SIZE_SCALE = 4 / 3; -- skin heights are points; ImGui sizes are pixels
 
--- True from the zone-out packet until ZONE_SETTLE seconds after zone-in.
-local zoning     = false;
-local zonedInAt  = nil;
+-- All text uses Ashita's own ImGui font. Adding font files with
+-- AddFontFromFileTTF while the game was running crashed DXVK (a read of
+-- freed memory on its dxvk-cs thread), likely when the font texture was
+-- rebuilt.
 
-local function is_zoning()
-    if (zonedInAt ~= nil) and (os.clock() - zonedInAt > ZONE_SETTLE) then
-        zoning = false;
-        zonedInAt = nil;
-    end
-    return zoning;
+-- gdifonts colors are 0xAARRGGBB. ImGui packs colors as 0xAABBGGRR. Built
+-- with arithmetic, not bit ops, so the result stays a positive number.
+local function to_imgui_color(argb)
+    local a = math.floor(argb / 0x1000000) % 0x100;
+    local r = math.floor(argb / 0x10000) % 0x100;
+    local g = math.floor(argb / 0x100) % 0x100;
+    local b = argb % 0x100;
+    return a * 0x1000000 + b * 0x10000 + g * 0x100 + r;
 end
 
-ashita.events.register('packet_in', '__ttimers_gdi_zone', function (e)
-    if (e.id == 0x000B) then
-        zoning = true;
-        zonedInAt = nil;
-    elseif (e.id == 0x000A) then
-        zoning = true;
-        zonedInAt = os.clock();
-    end
-end);
-
-local function next_alias(kind)
-    aliasCount = aliasCount + 1;
-    return string.format('__ttimers_%s_%d', kind, aliasCount);
+-- Width and height of text drawn at the given pixel size.
+local function text_size(text, size)
+    local w, h = imgui.CalcTextSize(text);
+    local ratio = size / imgui.GetFontSize();
+    return w * ratio, h * ratio;
 end
 
--- Shared shim behavior. Setters store state; render() pushes changed state to
--- the Ashita object and draws it.
+-- Shared shim behavior. Setters store state; render() draws it.
 local base = {};
 base.__index = base;
 
@@ -62,32 +56,7 @@ function base:set_position_y(y) self.state.y = y; end
 function base:set_visible(v) self.state.visible = v; end
 function base:set_z_order(z) end
 function base:get_texture() return nil; end
-
-function base:touch()
-    if (self.obj == nil) then
-        self.obj = self:create();
-        self.applied = {};
-        active[self] = true;
-    end
-    self.lastFrame = frame;
-    self.lastClock = os.clock();
-end
-
--- Calls setter(obj, value) only when value differs from what was last applied.
-function base:apply(key, setter, value)
-    if (self.applied[key] ~= value) then
-        self.applied[key] = value;
-        setter(self.obj, value);
-    end
-end
-
-function base:release()
-    if (self.obj ~= nil) then
-        self:delete();
-        self.obj = nil;
-        active[self] = nil;
-    end
-end
+function base:release() end
 
 -- Font objects.
 local font = setmetatable({}, { __index = base });
@@ -97,9 +66,7 @@ local function new_font(settings)
     settings = settings or {};
     local bg = settings.background or {};
     return setmetatable({
-        alias = next_alias('font'),
         state = {
-            family        = settings.font_family or 'Arial',
             height        = settings.font_height or 10,
             color         = settings.font_color or 0xFFFFFFFF,
             outline       = settings.outline_color or 0xFF000000,
@@ -112,24 +79,13 @@ local function new_font(settings)
             visible       = settings.visible ~= false,
             bgVisible     = bg.visible == true,
             bgColor       = bg.fill_color or 0xFF000000,
+            bgRounding    = bg.corner_rounding or 0,
         },
     }, font);
 end
 
-function font:create()
-    local obj = AshitaCore:GetFontManager():Create(self.alias);
-    obj:SetLocked(true);
-    obj:SetCanFocus(false);
-    obj:SetAutoResize(true);
-    return obj;
-end
-
-function font:delete()
-    AshitaCore:GetFontManager():Delete(self.alias);
-end
-
 function font:set_font_height(h) self.state.height = h; end
-function font:set_font_family(f) self.state.family = f; end
+function font:set_font_family(f) end
 function font:set_font_color(c) self.state.color = c; end
 function font:set_font_flags(f) self.state.flags = f; end
 function font:set_font_alignment(a) self.state.alignment = a; end
@@ -149,126 +105,112 @@ function font:set_background(settings)
     self.state.bgColor = settings.fill_color or self.state.bgColor;
 end
 
--- Not used by the classic renderer; size is unknown until the object exists.
-function font:get_text_size()
-    return 0, 0;
-end
+local function text_px(s) return math.floor(s.height * SIZE_SCALE + 0.5); end
 
-local function set_bg_visible(obj, v) obj:GetBackground():SetVisible(v); end
-local function set_bg_color(obj, c) obj:GetBackground():SetColor(c); end
+function font:get_text_size()
+    local s = self.state;
+    return text_size(s.text, text_px(s));
+end
 
 function font:render(sprite)
     local s = self.state;
-    if (not s.visible) or (s.text == '') or is_zoning() then
+    if (not s.visible) or (s.text == '') then
         return;
     end
-    self:touch();
-
-    local drawFlags = 0;
-    if (s.outlineWidth > 0) then
-        drawFlags = bit.bor(drawFlags, OUTLINED);
+    local list = imgui.GetForegroundDrawList();
+    if (list == nil) then
+        return;
     end
+
+    local face = imgui.GetFont();
+    local size = text_px(s);
+    local w, h = text_size(s.text, size);
+
+    -- Alignment 1 centers the text on x, 2 puts its right edge at x.
+    local x = s.x;
     if (s.alignment == 1) then
-        drawFlags = bit.bor(drawFlags, CENTER_X);
+        x = x - (w / 2);
     elseif (s.alignment == 2) then
-        drawFlags = bit.bor(drawFlags, RIGHT);
+        x = x - w;
+    end
+    local y = s.y;
+
+    if (s.bgVisible) then
+        list:AddRectFilled({ x - BG_PAD, y - BG_PAD }, { x + w + BG_PAD, y + h + BG_PAD },
+            to_imgui_color(s.bgColor), s.bgRounding);
     end
 
-    local obj = self.obj;
-    self:apply('family', obj.SetFontFamily, s.family);
-    self:apply('height', obj.SetFontHeight, math.floor(s.height));
-    self:apply('bold', obj.SetBold, bit.band(s.flags, 0x01) ~= 0);
-    self:apply('italic', obj.SetItalic, bit.band(s.flags, 0x02) ~= 0);
-    self:apply('color', obj.SetColor, s.color);
-    self:apply('outline', obj.SetColorOutline, s.outline);
-    self:apply('drawFlags', obj.SetDrawFlags, drawFlags);
-    self:apply('right', obj.SetRightJustified, s.alignment == 2);
-    self:apply('text', obj.SetText, s.text);
-    self:apply('x', obj.SetPositionX, s.x);
-    self:apply('y', obj.SetPositionY, s.y);
-    self:apply('visible', obj.SetVisible, true);
-    self:apply('bgVisible', set_bg_visible, s.bgVisible);
-    self:apply('bgColor', set_bg_color, s.bgColor);
+    -- ImGui text has no outline, so draw the text in the outline color one
+    -- pixel around the real position first. Wider outlines smeared small
+    -- text, so any outline width draws as one pixel.
+    if (s.outlineWidth > 0) then
+        local oc = to_imgui_color(s.outline);
+        for _, step in ipairs(OUTLINE_STEPS) do
+            list:AddText(face, size, { x + step[1], y + step[2] }, oc, s.text);
+        end
+    end
+
+    local color = to_imgui_color(s.color);
+    list:AddText(face, size, { x, y }, color, s.text);
+    -- Flag 0x01 is bold: draw it again one pixel to the right.
+    if (bit.band(s.flags, 0x01) ~= 0) then
+        list:AddText(face, size, { x + 1, y }, color, s.text);
+    end
 end
 
--- Rect objects (the drag handle). Drawing an Ashita primitive manually crashed
--- the game (access violation), so the handle is a font object showing "MOVE"
--- on a filled background. It is roughly, not exactly, width x height; tTimers
--- computes the clickable area itself.
+-- Rect objects (the drag handle), drawn as a filled rounded box.
 local rect = setmetatable({}, { __index = base });
 rect.__index = rect;
 
 local function new_rect(settings)
     settings = settings or {};
-    local r = setmetatable({
+    return setmetatable({
         state = {
-            width   = settings.width or 0,
-            height  = settings.height or 0,
-            fill    = settings.fill_color or 0xFFFFFFFF,
-            x       = settings.position_x or 0,
-            y       = settings.position_y or 0,
-            visible = settings.visible ~= false,
+            width        = settings.width or 0,
+            height       = settings.height or 0,
+            fill         = settings.fill_color or 0xFFFFFFFF,
+            outline      = settings.outline_color or 0xFF000000,
+            outlineWidth = settings.outline_width or 0,
+            rounding     = settings.corner_rounding or 0,
+            x            = settings.position_x or 0,
+            y            = settings.position_y or 0,
+            visible      = settings.visible ~= false,
         },
     }, rect);
-    r.label = new_font({
-        font_family   = 'Arial',
-        font_flags    = 0x01,
-        outline_width = 1,
-        background    = { visible = true, fill_color = r.state.fill },
-    });
-    return r;
 end
 
 function rect:set_width(w) self.state.width = w; end
 function rect:set_height(h) self.state.height = h; end
 function rect:set_fill_color(c) self.state.fill = c; end
-function rect:set_outline_color(c) end
-function rect:set_outline_width(w) end
-function rect:set_corner_rounding(r) end
+function rect:set_outline_color(c) self.state.outline = c; end
+function rect:set_outline_width(w) self.state.outlineWidth = w; end
+function rect:set_corner_rounding(r) self.state.rounding = r; end
 function rect:set_gradient_color(c) end
 function rect:set_gradient_style(s) end
-function rect:release() self.label:release(); end
 
 function rect:render(sprite)
     local s = self.state;
     if (not s.visible) or (s.width <= 0) or (s.height <= 0) then
         return;
     end
-    local label = self.label;
-    label:set_text('MOVE');
-    label:set_font_height(math.max(6, s.width / 4.5));
-    label:set_background({ visible = true, fill_color = s.fill });
-    label:set_position_x(s.x);
-    label:set_position_y(s.y);
-    label:render(sprite);
-end
-
--- Hide objects that were not rendered since the last sweep, and free the ones
--- unused for a while. Works whether this runs before or after tTimers' own
--- d3d_present handler in a frame.
-ashita.events.register('d3d_present', '__ttimers_gdi_sweep', function ()
-    local now = os.clock();
-    for obj in pairs(active) do
-        if (now - obj.lastClock > DELETE_AFTER) then
-            obj:release();
-        elseif (obj.lastFrame < frame) and (obj.applied.visible ~= false) then
-            obj.applied.visible = false;
-            obj.obj:SetVisible(false);
-        end
+    local list = imgui.GetForegroundDrawList();
+    if (list == nil) then
+        return;
     end
-    frame = frame + 1;
-end);
+    local a = { s.x, s.y };
+    local b = { s.x + s.width, s.y + s.height };
+    list:AddRectFilled(a, b, to_imgui_color(s.fill), s.rounding);
+    if (s.outlineWidth > 0) then
+        list:AddRect(a, b, to_imgui_color(s.outline), s.rounding, 0, s.outlineWidth);
+    end
+end
 
 local exports = {};
 
 function exports:create_object(settings, manual) return new_font(settings); end
 function exports:create_rect(settings, manual) return new_rect(settings); end
-function exports:destroy_object(object) if object then object:release(); end end
-function exports:destroy_interface()
-    for obj in pairs(active) do
-        obj:release();
-    end
-end
+function exports:destroy_object(object) end
+function exports:destroy_interface() end
 function exports:get_font_available(fontName) return true; end
 function exports:disable_texture_dump() end
 function exports:dump_frame(path) end

@@ -6,7 +6,7 @@ display and input fixes; the third makes the debuff tracker see AoE targets.
 No timing logic was changed and no packets are sent.
 
 Review the changes in one place: the first commit is the unmodified addon,
-the second commit is the whole diff.
+so `git diff 24fe218` shows everything changed since.
 
 ## Why
 
@@ -29,22 +29,25 @@ crash.
 
 The original file loads `gdifonttexture.dll` through LuaJIT FFI and uses it to
 render text into textures. The replacement keeps the same API (the functions
-tTimers calls are unchanged) but draws with Ashita's built-in font objects
-(`AshitaCore:GetFontManager()`) instead. The DLL is never loaded.
+tTimers calls are unchanged) but draws with ImGui instead. The DLL is never
+loaded.
 
-- Labels, countdowns and tooltips use Ashita font objects. Ashita draws them
-  in its own pass; the shim only shows the ones tTimers asked for each frame.
-  An earlier version drew them by hand with the `ManualRender` flag, which
-  crashed the game while zoning (a call into a freed Direct3D object in
-  DXVK's `d3d8.dll`). Nothing is created or shown from zone-out until 3 s
-  after zone-in.
-- The reposition drag handle is a small "MOVE" font object on a filled
-  background.
-- Objects tTimers stops drawing (expired timers) are hidden each frame and
-  freed after a few seconds.
+- Labels, countdowns and tooltips are added to ImGui's foreground draw list
+  with Ashita's own ImGui font, on the frames tTimers renders them. Nothing
+  is kept between frames, so there is nothing to free or hide. The
+  foreground list is drawn last, so text sits on top of the bars.
+- Outlines are the text drawn one pixel around itself in the outline color.
+  Bold is the text drawn again one pixel to the right.
+- The reposition drag handle is a filled rounded box.
 
-Cosmetic differences: rounded corners and gradients are not drawn, and font
-sizes differ slightly from the GDI renderer.
+Earlier versions used Ashita font objects. Drawing them by hand with the
+`ManualRender` flag crashed the game while zoning (a call into a freed
+Direct3D object in DXVK's `d3d8.dll`), and letting Ashita draw them put the
+text under the bars. Loading a font file with `AddFontFromFileTTF` while the
+game ran also crashed DXVK, so the skin's font family is ignored.
+
+Cosmetic differences: gradients are not drawn, every skin uses the same
+font, and text is wider than the GDI renderer's (see change 4).
 
 ### 2. `timergroup.lua`: mouse position scaling
 
